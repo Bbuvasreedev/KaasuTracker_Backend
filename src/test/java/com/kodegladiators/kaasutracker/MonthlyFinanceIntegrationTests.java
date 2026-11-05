@@ -487,7 +487,8 @@ class MonthlyFinanceIntegrationTests {
         User user = createUser(new BigDecimal("1000.00"));
         doThrow(new DataAccessResourceFailureException("simulated database failure"))
                 .when(installmentRepository)
-                .findAllSnapshotsByUserId(user.getId());
+                .findSnapshotsByUserIdAndDateRange(
+                        user.getId(), LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
 
         mockMvc.perform(get("/api/v1/finance/monthly-summary?year=2026&month=10")
                         .with(jwt().jwt(token -> token.subject(user.getId()))))

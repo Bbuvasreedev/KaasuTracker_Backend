@@ -438,7 +438,7 @@ public class MonthlyFinanceService {
         List<Emi> activeEmis = emiRepository.findAllByUserIdAndStatusOrderByIdAsc(userId, EmiStatus.ACTIVE);
         LocalDate today = LocalDate.now(clock);
         List<EmiInstallmentSnapshot> installmentSnapshots =
-                installmentRepository.findAllSnapshotsByUserId(userId);
+                installmentRepository.findSnapshotsByUserIdAndDateRange(userId, start, end);
         Map<EmiInstallmentKey, EmiInstallmentSnapshot> installmentsByDate = new HashMap<>();
         BigDecimal emiScheduled = ZERO;
         BigDecimal emiPaid = ZERO;

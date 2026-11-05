@@ -30,6 +30,19 @@ public interface EmiInstallmentRepository extends JpaRepository<EmiInstallment, 
             select new com.kodegladiators.kaasutracker.repository.EmiInstallmentSnapshot(
                 installment.emi.id, installment.dueDate, installment.amount, installment.status)
             from EmiInstallment installment
+            where installment.emi.user.id = :userId
+              and installment.dueDate between :startDate and :endDate
+            """)
+    List<EmiInstallmentSnapshot> findSnapshotsByUserIdAndDateRange(
+            @Param("userId") String userId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
+    @Query("""
+            select new com.kodegladiators.kaasutracker.repository.EmiInstallmentSnapshot(
+                installment.emi.id, installment.dueDate, installment.amount, installment.status)
+            from EmiInstallment installment
             where installment.emi.id = :emiId
               and installment.dueDate between :startDate and :endDate
             """)
