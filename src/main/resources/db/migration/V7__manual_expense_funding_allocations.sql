@@ -1,0 +1,2 @@
+ALTER TABLE expenses
+    ADD COLUMN IF NOT EXISTS funding_allocation_manual BOOLEAN NOT NULL DEFAULT FALSE;

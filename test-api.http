@@ -1,0 +1,29 @@
+### Define your Supabase JWT here
+@jwt = eyJhbGciOiJFUzI1NiIsImtpZCI6IjQwMGIxOTdkLTc2NWEtNGI3OC04NDVhLTM3ZmVhN2EzMzVmNyIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2FweHRiaHhha2h3amxibWJseWFkLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiIxMjI0OTQ0OS05MDhmLTQ0ZjQtYWU0Ny1iYzIxZjg0NzUyYWMiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzkyMzM2Nzc1LCJpYXQiOjE3OTIzMzMxNzUsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZW1haWwiLCJwcm92aWRlcnMiOlsiZW1haWwiXX0sInVzZXJfbWV0YWRhdGEiOnsiZW1haWxfdmVyaWZpZWQiOnRydWV9LCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6InBhc3N3b3JkIiwidGltZXN0YW1wIjoxNzkyMzMzMTc1fV0sInNlc3Npb25faWQiOiJkMzgzZTRiMi02OTQ5LTRlNzAtOGI2ZC01YjRmOGE3NWViYTAiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.GsSx59Gb-EqJErHzDtg5j0Ctg5pe4bHcCoqapqzY7E9Hzat3IVUOMIsSW0IZmXHFQHdkJjDjhAGL4koPtd6X7w
+
+### Test 1: Save a New Expense
+POST http://localhost:8080/api/v1/expenses
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "amount": 1500.00,
+  "category": "Travel",
+  "merchant": "MakeMyTrip",
+  "description": "Bus to Chennai",
+  "expenseDate": "2026-10-18",
+  "isConfirmed": true
+}
+
+### Test 2: Fetch User Expenses
+GET http://localhost:8080/api/v1/expenses
+Authorization: Bearer {{jwt}}
+
+### Test 3: Gemini AI Receipt Analysis
+POST http://localhost:8080/api/v1/expenses/analyze
+Authorization: Bearer {{jwt}}
+Content-Type: application/json
+
+{
+  "base64Image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+}
