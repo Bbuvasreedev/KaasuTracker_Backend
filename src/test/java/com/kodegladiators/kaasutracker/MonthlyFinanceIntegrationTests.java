@@ -232,6 +232,44 @@ class MonthlyFinanceIntegrationTests {
     }
 
     @Test
+    void borrowedFundAvailableBalanceUsesOutstandingRepaymentBalance() throws Exception {
+        User user = createUser(BigDecimal.ZERO);
+        String userId = user.getId();
+        long borrowedId = createFund("/api/v1/borrowed-funds", userId, """
+                {"amount":500.00,"fundDate":"2026-10-05","sourceDescription":"Family",
+                 "outstandingRepaymentBalance":300.00}
+                """);
+        createExpense(user, "100.00", "2026-10-15", true);
+        financeService.recalculateMonthFunding(userId, 2026, 10);
+
+        mockMvc.perform(get("/api/v1/finance/monthly-summary?year=2026&month=10")
+                        .with(jwt().jwt(token -> token.subject(userId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.borrowedFundsReceived").value(500.00))
+                .andExpect(jsonPath("$.borrowedFundsUsed").value(100.00))
+                .andExpect(jsonPath("$.remainingBorrowedFundsAvailable").value(200.00))
+                .andExpect(jsonPath("$.totalAvailableFunding").value(200.00));
+
+        mockMvc.perform(get("/api/v1/borrowed-funds?year=2026&month=10")
+                        .with(jwt().jwt(token -> token.subject(userId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.funds[0].id").value(borrowedId))
+                .andExpect(jsonPath("$.funds[0].outstandingRepaymentBalance").value(300.00))
+                .andExpect(jsonPath("$.funds[0].availableBalance").value(200.00))
+                .andExpect(jsonPath("$.totalReceived").value(500.00))
+                .andExpect(jsonPath("$.totalUsed").value(100.00))
+                .andExpect(jsonPath("$.remainingAvailable").value(200.00));
+
+        mockMvc.perform(get("/api/v1/borrowed-funds")
+                        .with(jwt().jwt(token -> token.subject(userId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.funds[0].availableBalance").value(200.00))
+                .andExpect(jsonPath("$.totalReceived").value(500.00))
+                .andExpect(jsonPath("$.totalUsed").value(100.00))
+                .andExpect(jsonPath("$.remainingAvailable").value(200.00));
+    }
+
+    @Test
     void replacesManualFundingAcrossSourcesAndRepeatedUpdatesDoNotDuplicateDeductions() throws Exception {
         User user = createUser(new BigDecimal("600.00"));
         long carryForwardId = createOpeningBalance(user, new BigDecimal("100.00"));
@@ -280,6 +318,39 @@ class MonthlyFinanceIntegrationTests {
         assertAmount("100.00", summary.remainingSalaryAvailable());
         assertAmount("100.00", summary.remainingBorrowedFundsAvailable());
         assertFundingInvariant(summary);
+    }
+
+    @Test
+    void replacingAllocationCanReuseThisExpensesExistingBorrowedFunds() throws Exception {
+        User user = createUser(new BigDecimal("100.00"));
+        long borrowedId = createFund("/api/v1/borrowed-funds", user.getId(), """
+                {"amount":200.00,"fundDate":"2026-10-05","sourceDescription":"Borrowed"}
+                """);
+        Expense expense = createExpense(user, "200.00", "2026-10-08", true);
+        var authenticated = jwt().jwt(token -> token.subject(user.getId()));
+
+        mockMvc.perform(put("/api/v1/expenses/{id}/funding", expense.getId())
+                        .with(authenticated)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"allocations":[
+                                  {"fundingSource":"BORROWED","sourceId":%d,"amount":200.00}
+                                ]}
+                                """.formatted(borrowedId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.allocations[0].amount").value(200.00));
+
+        mockMvc.perform(put("/api/v1/expenses/{id}/funding", expense.getId())
+                        .with(authenticated)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"allocations":[
+                                  {"fundingSource":"SALARY","amount":100.00},
+                                  {"fundingSource":"BORROWED","sourceId":%d,"amount":100.00}
+                                ]}
+                                """.formatted(borrowedId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.allocations.length()").value(2));
     }
 
     @Test

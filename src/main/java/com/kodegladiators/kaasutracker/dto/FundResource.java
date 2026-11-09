@@ -11,6 +11,7 @@ public record FundResource(
         String sourceDescription,
         String purpose,
         BigDecimal outstandingRepaymentBalance,
+        BigDecimal availableBalance,
         FundStatus status
 ) {
 }

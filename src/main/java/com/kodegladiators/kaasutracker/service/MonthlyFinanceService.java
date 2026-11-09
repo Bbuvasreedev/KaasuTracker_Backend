@@ -124,7 +124,7 @@ public class MonthlyFinanceService {
         applyBorrowed(fund, request);
         BorrowedFund saved = borrowedFundRepository.save(fund);
         recalculateMonthAllocations(userId, YearMonth.from(saved.getFundDate()));
-        return toResource(saved);
+        return toResource(saved, userId);
     }
 
     @Transactional
@@ -138,7 +138,7 @@ public class MonthlyFinanceService {
         applyBorrowed(fund, request);
         BorrowedFund saved = borrowedFundRepository.save(fund);
         recalculateMonthAllocations(userId, YearMonth.from(saved.getFundDate()));
-        return toResource(saved);
+        return toResource(saved, userId);
     }
 
     @Transactional
@@ -249,11 +249,18 @@ public class MonthlyFinanceService {
             received = sumBorrowed(funds);
             used = sumForPeriod(userId, FundingSource.BORROWED, period);
         }
+        BigDecimal remainingAvailable = funds.stream()
+                .filter(fund -> fund.getStatus() == FundStatus.AVAILABLE)
+                .map(fund -> availableBorrowedBalance(
+                        fund,
+                        usedForSource(userId, FundingSource.BORROWED, fund.getId(),
+                                YearMonth.from(fund.getFundDate()))))
+                .reduce(ZERO, BigDecimal::add);
         return new FundCollectionResource(
-                funds.stream().map(MonthlyFinanceService::toResource).toList(),
+                funds.stream().map(fund -> toResource(fund, userId)).toList(),
                 received,
                 used,
-                nonNegative(received.subtract(used))
+                remainingAvailable
         );
     }
 
@@ -320,6 +327,13 @@ public class MonthlyFinanceService {
         }
 
         YearMonth period = YearMonth.from(expense.getExpenseDate());
+        List<ExpenseFundingAllocation> existingAllocations = allocationRepository.findAllByExpenseId(expenseId);
+        Map<AllocationSourceKey, BigDecimal> existingAmountsBySource = new HashMap<>();
+        for (ExpenseFundingAllocation allocation : existingAllocations) {
+            AllocationSourceKey key = new AllocationSourceKey(
+                    allocation.getFundingSource(), allocation.getSourceId());
+            existingAmountsBySource.merge(key, allocation.getAmount(), BigDecimal::add);
+        }
         List<ExpenseFundingAllocation> requestedAllocations = new java.util.ArrayList<>();
         Set<AllocationSourceKey> allocationSources = new HashSet<>();
         BigDecimal requestedTotal = ZERO;
@@ -328,6 +342,12 @@ public class MonthlyFinanceService {
             AllocationSourceKey key = new AllocationSourceKey(allocation.getFundingSource(), allocation.getSourceId());
             if (!allocationSources.add(key)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate funding source allocation");
+            }
+            BigDecimal available = availableForReplacement(userId, period, allocation);
+            BigDecimal allowedMaximum = available.add(existingAmountsBySource.getOrDefault(key, ZERO));
+            if (item.amount().compareTo(allowedMaximum) > 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Funding allocation exceeds available funds");
             }
             requestedTotal = requestedTotal.add(item.amount());
             allocation.setExpense(expense);
@@ -339,7 +359,7 @@ public class MonthlyFinanceService {
                     HttpStatus.BAD_REQUEST, "Funding allocations must equal the expense amount");
         }
 
-        allocationRepository.deleteAll(allocationRepository.findAllByExpenseId(expenseId));
+        allocationRepository.deleteAll(existingAllocations);
         allocationRepository.flush();
         expense.setFundingAllocationManual(true);
         expenseRepository.save(expense);
@@ -412,8 +432,10 @@ public class MonthlyFinanceService {
         BigDecimal opening = openingBalanceRepository.findByUserIdAndYearAndMonth(
                         userId, period.getYear(), period.getMonthValue())
                 .map(MonthlyOpeningBalance::getAmount).orElse(ZERO);
-        BigDecimal borrowed = sumBorrowed(borrowedFundRepository
-                .findAllByUserIdAndFundDateBetweenAndStatus(userId, start, end, FundStatus.AVAILABLE));
+        List<BorrowedFund> borrowedFunds = borrowedFundRepository
+                .findAllByUserIdAndFundDateBetweenAndStatus(userId, start, end, FundStatus.AVAILABLE);
+        BigDecimal borrowed = sumBorrowed(borrowedFunds);
+        BigDecimal borrowedOutstanding = sumOutstandingBorrowed(borrowedFunds);
         BigDecimal additional = sumAdditional(additionalFundRepository
                 .findAllByUserIdAndFundDateBetweenAndStatus(userId, start, end, FundStatus.AVAILABLE));
         BigDecimal expenses = expenseRepository.sumEligibleNetAmount(userId, start, end);
@@ -424,12 +446,12 @@ public class MonthlyFinanceService {
         BigDecimal additionalUsed = sumForPeriod(userId, FundingSource.ADDITIONAL, period);
         salaryUsed = salaryUsed.min(salary);
         carryUsed = carryUsed.min(opening);
-        borrowedUsed = borrowedUsed.min(borrowed);
+        borrowedUsed = borrowedUsed.min(borrowedOutstanding);
         additionalUsed = additionalUsed.min(additional);
         BigDecimal allocated = salaryUsed.add(carryUsed).add(borrowedUsed).add(additionalUsed);
         BigDecimal remainingSalary = nonNegative(salary.subtract(salaryUsed));
         BigDecimal remainingCarryForward = nonNegative(opening.subtract(carryUsed));
-        BigDecimal remainingBorrowed = nonNegative(borrowed.subtract(borrowedUsed));
+        BigDecimal remainingBorrowed = nonNegative(borrowedOutstanding.subtract(borrowedUsed));
         BigDecimal remainingAdditional = nonNegative(additional.subtract(additionalUsed));
         BigDecimal totalAvailable = remainingSalary
                 .add(remainingCarryForward)
@@ -567,7 +589,7 @@ public class MonthlyFinanceService {
                 .toList();
         java.util.Map<Long, BigDecimal> borrowedBalances = new java.util.LinkedHashMap<>();
         for (BorrowedFund borrowedFund : borrowedFunds) {
-            borrowedBalances.put(borrowedFund.getId(), nonNegative(borrowedFund.getAmount()));
+            borrowedBalances.put(borrowedFund.getId(), outstandingBorrowedBalance(borrowedFund));
         }
 
         List<AdditionalFund> additionalFunds = additionalFundRepository
@@ -786,6 +808,24 @@ public class MonthlyFinanceService {
         return allocation;
     }
 
+    private BigDecimal availableForReplacement(
+            String userId, YearMonth period, ExpenseFundingAllocation allocation
+    ) {
+        BigDecimal sourceBalance = switch (allocation.getFundingSource()) {
+            case SALARY -> allocation.getSalary().getAmount();
+            case CARRY_FORWARD -> allocation.getOpeningBalance().getAmount();
+            case BORROWED -> outstandingBorrowedBalance(allocation.getBorrowedFund());
+            case ADDITIONAL -> allocation.getAdditionalFund().getAmount();
+        };
+        BigDecimal allocated = sumAllocatedToSource(
+                userId,
+                allocation.getFundingSource(),
+                allocation.getSourceId(),
+                period.atDay(1),
+                period.atEndOfMonth());
+        return nonNegative(sourceBalance.subtract(allocated));
+    }
+
     private static ResponseStatusException invalidFundingSource() {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid or ineligible funding source");
     }
@@ -843,6 +883,25 @@ public class MonthlyFinanceService {
         return funds.stream().map(BorrowedFund::getAmount).reduce(ZERO, BigDecimal::add);
     }
 
+    private static BigDecimal sumOutstandingBorrowed(List<BorrowedFund> funds) {
+        return funds.stream().map(MonthlyFinanceService::outstandingBorrowedBalance)
+                .reduce(ZERO, BigDecimal::add);
+    }
+
+    private static BigDecimal outstandingBorrowedBalance(BorrowedFund fund) {
+        BigDecimal outstanding = fund.getOutstandingRepaymentBalance() == null
+                ? fund.getAmount()
+                : fund.getOutstandingRepaymentBalance();
+        return nonNegative(outstanding);
+    }
+
+    private static BigDecimal availableBorrowedBalance(BorrowedFund fund, BigDecimal used) {
+        if (fund.getStatus() != FundStatus.AVAILABLE) {
+            return ZERO;
+        }
+        return nonNegative(outstandingBorrowedBalance(fund).subtract(used));
+    }
+
     private static CarryForwardResource toCarryForwardResource(
             MonthlyOpeningBalance opening, MonthlyFinancialSummary summary
     ) {
@@ -895,10 +954,15 @@ public class MonthlyFinanceService {
         fund.setStatus(FundStatus.AVAILABLE);
     }
 
-    private static FundResource toResource(BorrowedFund fund) {
+    private FundResource toResource(BorrowedFund fund, String userId) {
+        BigDecimal used = fund.getStatus() == FundStatus.AVAILABLE
+                ? usedForSource(userId, FundingSource.BORROWED, fund.getId(),
+                        YearMonth.from(fund.getFundDate()))
+                : ZERO;
         return new FundResource(fund.getId(), fund.getAmount(), fund.getFundDate(),
                 fund.getSourceDescription(), fund.getPurpose(),
-                fund.getOutstandingRepaymentBalance(), fund.getStatus());
+                fund.getOutstandingRepaymentBalance(),
+                availableBorrowedBalance(fund, used), fund.getStatus());
     }
 
     private static AdditionalFundResource toResource(AdditionalFund fund) {
